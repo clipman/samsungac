@@ -33,7 +33,6 @@ https://github.com/SebuZet/samsungrac
         name: Bedroom AC
         unique_id: bedroom_aircon
         device_id: "1"
-        debug: false
     ```
 
 ## Sensors (air quality / filter status)
@@ -54,7 +53,6 @@ sensor:
       - odor_level
       - pm10
       - pm2_5
-    debug: false
   - platform: samsung_ac
     ip_address: 192.168.219.xx   # AC's actual IP (static IP recommended)
     token: XXXXrz6771
@@ -64,7 +62,6 @@ sensor:
     device_id: "1"
     sensors:
       - humidity
-    debug: false
 ```
 
 | Parameter        | description           |  Required        |
