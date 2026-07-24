@@ -97,7 +97,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
             CONFIG_DEVICE_UPDATE_DELAY, default=DEFAULT_UPDATE_DELAY
         ): cv.string,
         vol.Optional(CONF_DEVICE_ID, default="032000000"): cv.string,
-        vol.Optional(CONF_SENSORS, default=list(SENSOR_TYPES.keys())): vol.All(
+        # NOTE: default is an empty list on purpose. If `sensors:` is omitted
+        # from the YAML config, no auxiliary sensor entities are created.
+        # Sensors are only created when the user explicitly lists them.
+        vol.Optional(CONF_SENSORS, default=[]): vol.All(
             cv.ensure_list, [vol.In(SENSOR_TYPES.keys())]
         ),
     }
@@ -108,6 +111,13 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     """Set up samsung_ac auxiliary sensors."""
     _LOGGER.setLevel(logging.DEBUG if config.get(CONF_DEBUG, False) else logging.WARNING)
     _LOGGER.info("samsung_ac: async setup sensor platform")
+
+    wanted_keys = config.get(CONF_SENSORS, [])
+    if not wanted_keys:
+        _LOGGER.info(
+            "samsung_ac sensor: no 'sensors:' configured, skipping entity creation"
+        )
+        return
 
     try:
         device_controller = await create_controller(
@@ -124,7 +134,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     if device_controller is None:
         raise PlatformNotReady
 
-    wanted_keys = config.get(CONF_SENSORS, list(SENSOR_TYPES.keys()))
     # Only create entities for values the device/yaml actually reports,
     # e.g. some units don't expose a Sensors array at all.
     available_keys = [k for k in wanted_keys if k in device_controller.attributes]
