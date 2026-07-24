@@ -25,7 +25,6 @@ from homeassistant.components.climate import (
     ATTR_SWING_MODES,
     ATTR_TARGET_TEMP_HIGH,
     ATTR_TARGET_TEMP_LOW,
-    DOMAIN,
     ClimateEntity,
     HVACMode,
 )
@@ -55,6 +54,7 @@ from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.service import extract_entity_ids
 from homeassistant.util.unit_conversion import TemperatureConverter
 
+from . import DOMAIN
 from .controller import ATTR_POWER, ClimateController, create_controller
 from .yaml_const import (
     CONF_CERT,
