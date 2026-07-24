@@ -100,7 +100,7 @@ You can easily add, remove or modify any device parameter to meet device capabil
 ```yaml
 climate:
   - platform: samsung_ac
-    config_file: /config/custom_components/samsung_ac/samsung_ac.yaml
+    config_file: samsung_ac.yaml
     ip_address: 192.168.219.8
     token: XXXXrz6771
     cert: ac14k_m.pem
@@ -153,12 +153,12 @@ switch:
       purify:
         value_template: "{{ is_state_attr('climate.salon_ac', 'purify', 'on') }}"
         turn_on:
-          service: climate.samsung_ac_set_property
+          action: samsung_ac.samsung_ac_set_property
           data:
             entity_id: climate.salon_ac
             purify: 'on'
         turn_off:
-          service: climate.samsung_ac_set_property
+          action: samsung_ac.samsung_ac_set_property
           data:
             entity_id: climate.salon_ac
             purify: 'off'
