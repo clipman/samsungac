@@ -194,7 +194,12 @@ class ClimateIpSensor(SensorEntity):
         """Refresh the shared controller, then push state to linked sensors."""
         await self.rac.async_update_state()
         for ent in self.linked_entities:
-            ent.async_write_ha_state()
+            # During the initial update_before_add pass, linked entities
+            # haven't been registered with hass yet (no entity_id assigned),
+            # so writing state would raise NoEntitySpecifiedError. Once they
+            # are added, hass/entity_id are set and it's safe to push.
+            if ent.hass is not None and ent.entity_id is not None:
+                ent.async_write_ha_state()
 
     @property
     def native_value(self):
