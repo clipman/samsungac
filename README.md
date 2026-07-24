@@ -170,8 +170,5 @@ switch:
 ## TODO
 Documentation...
 
-
 ## Known issues
 
-SSL issues when running a pip install might be fixed with :
-https://github.com/clipman/samsungac/issues/25
