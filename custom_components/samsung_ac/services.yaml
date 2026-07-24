@@ -1,1 +1,151 @@
-
+samsung_ac_set_property:
+  name: Set Samsung AC property
+  description: >-
+    Sets one or more device-specific properties on a Samsung AC that aren't
+    covered by the standard climate entity controls (fan mode, HVAC mode,
+    swing mode, target temperature). Any combination of the fields below can
+    be sent in a single call; only the fields you include are changed.
+  target:
+    entity:
+      domain: climate
+      integration: samsung_ac
+  fields:
+    power:
+      name: Power
+      description: Turn the unit on or off.
+      example: "on"
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    hvac_mode:
+      name: HVAC mode
+      description: >-
+        Operating mode. Equivalent to the climate entity's built-in HVAC
+        mode selector, exposed here so it can be combined with other
+        properties in one call.
+      example: cool
+      selector:
+        select:
+          options:
+            - cool
+            - heat
+            - dry
+            - fan_only
+            - auto
+            - "off"
+    preset_mode:
+      name: Preset mode
+      description: Preset/comfort mode.
+      example: Comfort
+      selector:
+        select:
+          options:
+            - None
+            - Good Sleep
+            - Fast Turbo
+            - 2 Step
+            - Comfort
+            - Quiet
+            - Single User
+            - Wind Free
+    special_mode:
+      name: Special mode
+      description: >-
+        Special/comfort mode. Same underlying options as preset_mode; kept
+        as a separate field for yaml configs that expose it under its own
+        name.
+      example: Quiet
+      selector:
+        select:
+          options:
+            - "Off"
+            - Good Sleep
+            - Fast Turbo
+            - 2 Step
+            - Comfort
+            - Quiet
+            - Single User
+            - Wind Free
+    purify:
+      name: Purify
+      description: Turn air purify mode on or off.
+      example: "on"
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    auto_clean:
+      name: Auto clean
+      description: Turn auto clean mode on or off.
+      example: "on"
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    beep:
+      name: Beep
+      description: Turn the unit's button/response beep on or off.
+      example: "off"
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    fan_mode:
+      name: Fan mode
+      description: Fan speed.
+      example: medium
+      selector:
+        select:
+          options:
+            - auto
+            - low
+            - medium
+            - high
+            - Turbo
+    fan_max_mode:
+      name: Maximum fan mode
+      description: Maximum allowed fan speed.
+      example: high
+      selector:
+        select:
+          options:
+            - auto
+            - low
+            - medium
+            - high
+            - Turbo
+    swing_mode:
+      name: Swing mode
+      description: Louver swing direction.
+      example: vertical
+      selector:
+        select:
+          options:
+            - "off"
+            - vertical
+            - horizontal
+            - both
+    good_sleep:
+      name: Good sleep timer
+      description: Good Sleep mode duration, in hours (0 disables it).
+      example: 8
+      selector:
+        number:
+          min: 0
+          max: 24
+          step: 1
+          unit_of_measurement: h
+    temperature:
+      name: Target temperature
+      description: Target temperature, in the unit configured for the device.
+      example: 24
+      selector:
+        number:
+          min: 8
+          max: 30
+          step: 1
