@@ -41,20 +41,20 @@ In addition to the `climate` platform, this component also provides a `sensor` p
 ```yaml
 sensor:
   - platform: samsung_ac
-    ip_address: 192.168.219.xx   # AC's actual IP (static IP recommended)
+    ip_address: 192.168.219.8
     token: XXXXrz6771
     cert: ac14k_m.pem
-    name: Living Room AC
+    name: Livingroom AC
     unique_id: livingroom_aircon
     device_id: "0"
-    sensors:    # if omitted, all defaults (clean_level, odor_level, pm10, pm2_5, humidity) are created
+    sensors:
       - humidity
       - clean_level
       - odor_level
       - pm10
       - pm2_5
   - platform: samsung_ac
-    ip_address: 192.168.219.xx   # AC's actual IP (static IP recommended)
+    ip_address: 192.168.219.8
     token: XXXXrz6771
     cert: ac14k_m.pem
     name: Bedroom AC
