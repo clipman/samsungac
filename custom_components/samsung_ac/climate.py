@@ -319,7 +319,12 @@ class ClimateIP(ClimateEntity):
     @property
     def target_temperature(self):
         return self.rac.get_property(ATTR_TEMPERATURE)
-        
+
+    @property
+    def target_temperature_step(self):
+        """Return the supported step of target temperature."""
+        return 1
+
     @property
     def hvac_mode(self):
         mode = self.rac.get_property(ATTR_HVAC_MODE)
