@@ -90,7 +90,6 @@ If you have multiple AC units connected to the same hub, add one `sensor` block 
     | unique_id | Unique ID for the entity. Recommended when running multiple AC units, so HA doesn't have to derive one automatically | No
     | device_id | Device ID on the hub, for controllers that can manage multiple units. Defaults to `032000000` | No
     | controller    | Controller type to use (default, and the only one for now: yaml)  | No
-    | poll      | Enable/disable state polling. Default: taken from YAML config | No
     | debug      | Enable/disable more debugs. Default: False | No
 2. You need to have your device __token__. I will create a guide to gather it
 3. YAML configuration
@@ -104,7 +103,7 @@ climate:
     ip_address: 192.168.219.8
     token: XXXXrz6771
     cert: ac14k_m.pem
-    name: Living Room AC
+    name: Livingroom AC
     unique_id: livingroom_aircon
     device_id: "0"
     debug: false
