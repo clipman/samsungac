@@ -171,3 +171,24 @@ Documentation...
 
 ## Known issues
 
+### Noisy `urllib3.connection` header-parsing warnings
+
+The AC's local REST API sends a slightly malformed `X-API-Version` header
+(a stray space before the colon), which trips up Python 3.14's stricter
+header parsing in `urllib3`. This doesn't affect functionality, but it can
+flood your Home Assistant log with entries like:
+
+```
+로거: urllib3.connection
+Failed to parse headers (url=https://192.168.219.8:8888/devices): [MissingHeaderBodySeparatorDefect()], unparsed data: 'X-API-Version : v1.0.0\r\n\r\n'
+```
+
+To silence just this logger without hiding other useful logs, add the
+following to your `configuration.yaml`:
+
+```yaml
+logger:
+  default: info
+  logs:
+    urllib3.connection: fatal
+```
