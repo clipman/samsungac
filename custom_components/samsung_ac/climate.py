@@ -56,6 +56,7 @@ from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import DOMAIN
 from .controller import ATTR_POWER, ClimateController, create_controller
+from .device import async_register_device
 from .yaml_const import (
     CONF_CERT,
     CONF_CONFIG_FILE,
@@ -371,6 +372,18 @@ class ClimateIP(ClimateEntity):
         if SAMSUNG_AC_DATA not in self.hass.data:
             self.hass.data[SAMSUNG_AC_DATA] = {ENTITIES: []}
         self.hass.data[SAMSUNG_AC_DATA][ENTITIES].append(self)
+
+        # This integration is set up via configuration.yaml (no config_entry),
+        # so HA won't auto-create a device from device_info. Register/attach
+        # the device manually so this climate entity (and any samsung_ac
+        # sensors sharing the same unique_id) show up grouped under one
+        # device instead of as bare entities.
+        await async_register_device(
+            self.hass,
+            self,
+            device_unique_id=self._attr_unique_id,
+            name=self.name,
+        )
 
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""

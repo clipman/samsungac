@@ -29,6 +29,7 @@ from homeassistant.const import (
 from homeassistant.exceptions import PlatformNotReady
 
 from .controller import create_controller
+from .device import async_register_device
 from .yaml_const import (
     CONF_CERT,
     CONF_CONFIG_FILE,
@@ -174,6 +175,10 @@ class ClimateIpSensor(SensorEntity):
         self._attr_device_class = meta.get("device_class")
         self._attr_native_unit_of_measurement = meta.get("unit")
         self._attr_state_class = meta.get("state_class")
+        # Show whole numbers in the UI (e.g. "42 %" instead of "42.3 %").
+        # This only affects display/rounding - the underlying value stored
+        # in history/long-term statistics is untouched.
+        self._attr_suggested_display_precision = 0
 
         base_name = config.get(CONFIG_DEVICE_NAME) or self.rac.name
         self._attr_name = f"{base_name} {meta['name']}"
@@ -182,6 +187,12 @@ class ClimateIpSensor(SensorEntity):
             "samsung_ac_" + (self.rac.unique_id or base_name)
         )
         self._attr_unique_id = f"{base_unique_id}_{key}"
+
+        # Same value climate.py uses as its own unique_id / device identifier,
+        # so this sensor is attached to the same device as the AC's climate
+        # entity instead of getting its own separate device.
+        self._device_unique_id = base_unique_id
+        self._device_name = base_name
 
         self._poll = None
         str_poll = config.get(CONFIG_DEVICE_POLL, "")
@@ -198,6 +209,21 @@ class ClimateIpSensor(SensorEntity):
         if self._poll is not None:
             return self._poll
         return self.rac.poll
+
+    async def async_added_to_hass(self):
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+
+        # Same reasoning as climate.py: this platform is configured via
+        # configuration.yaml (no config_entry), so device_info is never read
+        # automatically. Attach this sensor to the same device as the AC's
+        # climate entity (matched by device_unique_id).
+        await async_register_device(
+            self.hass,
+            self,
+            device_unique_id=self._device_unique_id,
+            name=self._device_name,
+        )
 
     async def async_update(self):
         """Refresh the shared controller, then push state to linked sensors."""
