@@ -537,6 +537,16 @@ class ClimateIP(ClimateEntity):
                 self._async_periodic_humidity_refresh,
                 timedelta(seconds=self._humidity_refresh_interval),
             )
+            # async_track_time_interval only schedules *future* callbacks,
+            # so without this the entity would sit at a stale/0% humidity
+            # for up to _humidity_refresh_interval seconds after every HA
+            # restart or entity reload. Kick off one refresh immediately,
+            # as a background task (not awaited here) so it runs after this
+            # entity's own initial poll has populated hvac_mode, and so it
+            # doesn't delay entity registration.
+            self.hass.async_create_task(
+                self._async_periodic_humidity_refresh(None)
+            )
 
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""
