@@ -217,6 +217,11 @@ class ClimateIP(ClimateEntity):
         # Attributes for robust optimistic mode
         self._last_optimistic_update_time = 0
         self._optimistic_debounce_seconds = 10 # Ignore polls for 10s after an optimistic update
+        # Device couples "power" and "hvac_mode" into a single reported state
+        # (status_template shows "off" when power is off, otherwise the mode).
+        # Remember the last non-off hvac mode so turn_on can optimistically
+        # restore it instead of leaving hvac_mode stuck on "off".
+        self._last_active_hvac_mode = None
 
     @property
     def should_poll(self):
@@ -256,6 +261,21 @@ class ClimateIP(ClimateEntity):
             self.rac.async_set_property(prop, value)
         )
 
+    def _remember_active_hvac_mode(self, hvac_mode):
+        """Cache the last non-off hvac mode so a later turn_on can restore it."""
+        if hvac_mode and hvac_mode != HVACMode.OFF:
+            self._last_active_hvac_mode = hvac_mode
+
+    def _optimistic_set_power(self, power_state):
+        """Optimistically update the cached 'power' operation, if present."""
+        if ATTR_POWER in self.rac._operations:
+            self.rac._operations[ATTR_POWER]._value = power_state
+
+    def _optimistic_set_hvac_mode(self, hvac_mode):
+        """Optimistically update the cached 'hvac_mode' operation, if present."""
+        if ATTR_HVAC_MODE in self.rac._operations:
+            self.rac._operations[ATTR_HVAC_MODE]._value = hvac_mode
+
     async def async_set_temperature(self, **kwargs):
         """Asynchronously set new target temperature and verify."""
         new_temp = kwargs.get(ATTR_TEMPERATURE)
@@ -264,6 +284,17 @@ class ClimateIP(ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: str):
         """Asynchronously set new target hvac mode and verify."""
+        # The device reports hvac_mode as a combination of "power" and the
+        # actual mode (see samsung_ac.yaml status_template): power off means
+        # hvac_mode "off", and any other mode implies power is on. Setting
+        # the mode already flips power on the device side (or off, for
+        # "off"), so mirror that on the cached "power" operation too,
+        # otherwise it stays stale until the next poll.
+        if hvac_mode == HVACMode.OFF:
+            self._optimistic_set_power(STATE_OFF)
+        else:
+            self._optimistic_set_power(STATE_ON)
+            self._remember_active_hvac_mode(hvac_mode)
         await self._send_and_verify(ATTR_HVAC_MODE, hvac_mode)
 
     async def async_set_fan_mode(self, fan_mode: str):
@@ -280,10 +311,20 @@ class ClimateIP(ClimateEntity):
 
     async def async_turn_on(self):
         """Asynchronously turn the climate device on and verify."""
+        # Turning on only calls the power endpoint, not the mode endpoint,
+        # so the device will resume whatever mode it was last in. Reflect
+        # that guess in hvac_mode optimistically so the UI doesn't keep
+        # showing "off" until the next poll corrects it.
+        target_mode = self._last_active_hvac_mode or next(
+            (m for m in self.hvac_modes if m != HVACMode.OFF), None
+        )
+        if target_mode:
+            self._optimistic_set_hvac_mode(target_mode)
         await self._send_and_verify(ATTR_POWER, STATE_ON)
 
     async def async_turn_off(self):
         """Asynchronously turn the climate device off and verify."""
+        self._optimistic_set_hvac_mode(HVACMode.OFF)
         await self._send_and_verify(ATTR_POWER, STATE_OFF)
         
     async def async_set_custom_operation(self, **kwargs):
@@ -329,7 +370,12 @@ class ClimateIP(ClimateEntity):
     @property
     def hvac_mode(self):
         mode = self.rac.get_property(ATTR_HVAC_MODE)
-        return mode if mode not in [STATE_UNKNOWN, STATE_UNAVAILABLE, "", None] else HVACMode.OFF
+        mode = mode if mode not in [STATE_UNKNOWN, STATE_UNAVAILABLE, "", None] else HVACMode.OFF
+        # Keep the "last active mode" cache fresh from real (polled) state too,
+        # not just from HA-initiated changes, so turn_on's optimistic guess
+        # stays accurate even if the mode was changed elsewhere (e.g. remote).
+        self._remember_active_hvac_mode(mode)
+        return mode
 
     @property
     def hvac_modes(self):
