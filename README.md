@@ -24,7 +24,8 @@ https://github.com/SebuZet/samsungrac
         name: Living Room AC
         unique_id: livingroom_aircon
         device_id: "0"
-        debug: false
+        humidity_refresh_interval: 600
+
       - platform: samsung_ac
         config_file: /config/custom_components/samsung_ac/samsung_ac.yaml
         ip_address: 192.168.219.xx   # AC's actual IP (static IP recommended)
@@ -33,6 +34,7 @@ https://github.com/SebuZet/samsungrac
         name: Bedroom AC
         unique_id: bedroom_aircon
         device_id: "1"
+        humidity_refresh_interval: 0
     ```
 
 ## Sensors (air quality / filter status)
@@ -53,6 +55,7 @@ sensor:
       - odor_level
       - pm10
       - pm2_5
+
   - platform: samsung_ac
     ip_address: 192.168.219.8
     token: XXXXrz6771
@@ -60,8 +63,6 @@ sensor:
     name: Bedroom AC
     unique_id: bedroom_aircon
     device_id: "1"
-    sensors:
-      - humidity
 ```
 
 | Parameter        | description           |  Required        |
@@ -90,6 +91,7 @@ If you have multiple AC units connected to the same hub, add one `sensor` block 
     | unique_id | Unique ID for the entity. Recommended when running multiple AC units, so HA doesn't have to derive one automatically | No
     | device_id | Device ID on the hub, for controllers that can manage multiple units. Defaults to `032000000` | No
     | controller    | Controller type to use (default, and the only one for now: yaml)  | No
+    | humidity_refresh_interval | How often (in seconds) the `climate` entity automatically triggers an on-demand humidity/air-quality reading (see [Humidity reading](#humidity-reading) below). Runs once immediately on startup, then repeats on this interval. Default: `600` (10 minutes). Set to `0` to disable automatic refreshing entirely (e.g. for units without a humidity sensor). | No
     | debug      | Enable/disable more debugs. Default: False | No
 2. You need to have your device __token__. I will create a guide to gather it
 3. YAML configuration
@@ -121,6 +123,7 @@ Functionality depends on the yaml configuration file and can be easily changed b
 * turn auto clean mode on and off
 * turn beep mode on and off
 * read current indoor temperature
+* read current indoor humidity (on-demand refresh, see [Humidity reading](#humidity-reading))
 * read device configuration
 
 ## Using
@@ -130,6 +133,23 @@ This component implements the Home Assistant ClimateDevice class. Functionality 
 * select fan mode
 * select swing mode
 * select target temperatures (min, max and target)
+
+### Humidity reading
+Samsung units only measure indoor humidity on-demand, not continuously - except while in **Dry** mode, where a live value is reported automatically. Outside of Dry mode, the `climate` entity's `current_humidity` attribute (and the standalone `sensor.humidity` entity, if configured) will otherwise sit at a stale or `0` value until a reading is explicitly requested.
+
+To handle this automatically, the `climate` entity periodically triggers a fresh reading in the background:
+* Runs once immediately when the entity loads/reloads, then every `humidity_refresh_interval` seconds (default `600`, i.e. 10 minutes).
+* Skipped while the unit is `off` or already in `Dry` mode, since neither case needs the nudge.
+* Set `humidity_refresh_interval: 0` to disable this entirely - useful for units that don't have a humidity sensor at all.
+
+You can also trigger a reading manually (e.g. from an automation or the Developer Tools > Actions panel) using the **climate.samsung_ac_refresh_humidity** service:
+```yaml
+action: climate.samsung_ac_refresh_humidity
+data:
+  entity_id: climate.livingroom_aircon
+```
+Omit `entity_id` to refresh all configured `samsung_ac` climate entities at once.
+
 ### Device specific functions
 Device specific functionality is added as extra service called **climate.samsung_ac_set_property**.
 Every device attribute can be set using this service with proper params.
@@ -179,7 +199,7 @@ header parsing in `urllib3`. This doesn't affect functionality, but it can
 flood your Home Assistant log with entries like:
 
 ```
-로거: urllib3.connection
+Logger: urllib3.connection
 Failed to parse headers (url=https://192.168.219.8:8888/devices): [MissingHeaderBodySeparatorDefect()], unparsed data: 'X-API-Version : v1.0.0\r\n\r\n'
 ```
 
