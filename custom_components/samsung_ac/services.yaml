@@ -30,7 +30,7 @@ samsung_ac_set_property:
         select:
           options:
             - cool
-            - heat
+            # - heat
             - dry
             - fan_only
             - auto
