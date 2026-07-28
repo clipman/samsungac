@@ -457,6 +457,18 @@ class ClimateIP(ClimateEntity):
         return self.rac.get_property(ATTR_TEMPERATURE)
 
     @property
+    def current_humidity(self):
+        """
+        Return the current humidity.
+
+        Sourced from the same "humidity" attribute the standalone sensor.py
+        entity reads (see samsung_ac.yaml). As noted on async_refresh_humidity,
+        the device only reports a live value outside Dry mode right after an
+        AirMonitoring_On nudge, so this will read 0/stale between refreshes.
+        """
+        return self.rac.get_property("humidity")
+
+    @property
     def target_temperature_step(self):
         """Return the supported step of target temperature."""
         return 1
