@@ -465,7 +465,15 @@ class ClimateIP(ClimateEntity):
         entity reads (see samsung_ac.yaml). As noted on async_refresh_humidity,
         the device only reports a live value outside Dry mode right after an
         AirMonitoring_On nudge, so this will read 0/stale between refreshes.
+
+        If humidity_refresh_interval is set to 0, this unit is being told to
+        never trigger that refresh - typically because it has no working
+        humidity sensor and would otherwise just sit at a permanent 0%.
+        Treat that as "no humidity reading" and hide the attribute entirely
+        rather than showing a misleading 0%.
         """
+        if self._humidity_refresh_interval <= 0:
+            return None
         return self.rac.get_property("humidity")
 
     @property
