@@ -51,11 +51,12 @@ from homeassistant.const import (
 )
 from homeassistant.exceptions import PlatformNotReady
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import extract_entity_ids
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import DOMAIN
-from .controller import ATTR_POWER, ClimateController, create_controller
+from .controller import ATTR_POWER, ClimateController, ENTITIES, SAMSUNG_AC_DATA, create_controller
 from .device import async_register_device
 from .yaml_const import (
     CONF_CERT,
@@ -63,6 +64,7 @@ from .yaml_const import (
     CONF_CONTROLLER,
     CONF_DEBUG,
     CONF_DEVICE_ID,
+    CONFIG_DEVICE_HUMIDITY_REFRESH_INTERVAL,
     CONFIG_DEVICE_NAME,
     CONFIG_DEVICE_POLL,
     CONFIG_DEVICE_UPDATE_DELAY,
@@ -86,12 +88,15 @@ SCAN_INTERVAL = timedelta(seconds=15)
 
 REQUIREMENTS = ["requests>=2.21.0"]
 
-SAMSUNG_AC_DATA = "samsung_ac_data"
-ENTITIES = "entities"
 DEFAULT_SAMSUNG_AC_TEMP_MIN = 8
 DEFAULT_SAMSUNG_AC_TEMP_MAX = 30
 DEFAULT_UPDATE_DELAY = 1.5
+# 냉방 등 습도가 상시 갱신되지 않는 모드에서, 이 주기(초)마다 자동으로
+# air_monitoring_refresh를 트리거합니다. 0으로 설정하면 자동 갱신을 비활성화합니다.
+# (제습(Dry) 모드는 이미 자체적으로 습도가 갱신되므로 자동 트리거 대상에서 제외합니다.)
+DEFAULT_HUMIDITY_REFRESH_INTERVAL = 600
 SERVICE_SET_CUSTOM_OPERATION = "samsung_ac_set_property"
+SERVICE_REFRESH_HUMIDITY = "samsung_ac_refresh_humidity"
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
@@ -111,6 +116,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(
             CONFIG_DEVICE_UPDATE_DELAY, default=DEFAULT_UPDATE_DELAY
         ): cv.string,
+        vol.Optional(
+            CONFIG_DEVICE_HUMIDITY_REFRESH_INTERVAL,
+            default=DEFAULT_HUMIDITY_REFRESH_INTERVAL,
+        ): vol.Coerce(int),
         vol.Optional(CONF_DEVICE_ID, default="032000000"): cv.string,
     }
 )
@@ -120,7 +129,14 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     """
     Set up the samsung_ac platform asynchronously.
     """
-    _LOGGER.setLevel(logging.DEBUG if config.get("debug", False) else logging.WARNING)
+    # _LOGGER (`logging.getLogger(__package__)`)는 climate/sensor 플랫폼과
+    # controller_yaml.py, properties.py 등 컴포넌트 전체가 공유하는
+    # 싱글턴 로거입니다. 여기서 무조건 setLevel()을 부르면, sensor
+    # 플랫폼(혹은 다른 기기)이 debug: false로 나중에 초기화될 때 이미
+    # debug: true로 올려둔 레벨을 WARNING으로 도로 낮춰버립니다. 그래서
+    # "낮추는 것"은 하지 않고 필요할 때 "올리는 것"만 합니다.
+    if config.get("debug", False):
+        _LOGGER.setLevel(logging.DEBUG)
     _LOGGER.info("samsung_ac: async setup platform")
 
     try:
@@ -175,6 +191,45 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         schema=vol.Schema(service_schema),
     )
 
+    async def async_service_handler_refresh_humidity(service):
+        entity_ids = service.data.get(ATTR_ENTITY_ID)
+        devices_to_update = []
+        if SAMSUNG_AC_DATA in hass.data and ENTITIES in hass.data[SAMSUNG_AC_DATA]:
+            if entity_ids:
+                devices_to_update = [
+                    device
+                    for device in hass.data[SAMSUNG_AC_DATA][ENTITIES]
+                    if device.entity_id in entity_ids
+                ]
+            else:
+                devices_to_update = hass.data[SAMSUNG_AC_DATA][ENTITIES]
+
+        refreshed_controllers = set()
+        for device in devices_to_update:
+            if hasattr(device, "async_refresh_humidity"):
+                await device.async_refresh_humidity()
+                refreshed_controllers.add(id(device.rac))
+
+        if refreshed_controllers and SAMSUNG_AC_DATA in hass.data:
+            # climate.py's own async_refresh_humidity() already writes its
+            # own state after the nudge, but since controllers are now
+            # shared per physical device (see controller.py), any sibling
+            # entity backed by that same controller - most notably the
+            # standalone humidity sensor from sensor.py - already has the
+            # fresh value available too. Push it out immediately instead of
+            # leaving that entity to wait for its own next scheduled poll.
+            for ent in hass.data[SAMSUNG_AC_DATA][ENTITIES]:
+                if id(getattr(ent, "rac", None)) in refreshed_controllers:
+                    if ent.hass is not None and ent.entity_id is not None:
+                        ent.async_write_ha_state()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REFRESH_HUMIDITY,
+        async_service_handler_refresh_humidity,
+        schema=vol.Schema({vol.Optional(ATTR_ENTITY_ID): cv.comp_entity_ids}),
+    )
+
 
 class ClimateIP(ClimateEntity):
     """Representation of a Samsung climate device, now fully asynchronous."""
@@ -212,6 +267,13 @@ class ClimateIP(ClimateEntity):
         self._update_delay = float(
             config.get(CONFIG_DEVICE_UPDATE_DELAY, DEFAULT_UPDATE_DELAY)
         )
+        self._humidity_refresh_interval = int(
+            config.get(
+                CONFIG_DEVICE_HUMIDITY_REFRESH_INTERVAL,
+                DEFAULT_HUMIDITY_REFRESH_INTERVAL,
+            )
+        )
+        self._humidity_refresh_unsub = None
         self._enable_turn_on_off_backwards_compatibility = False
         
         # Attributes for robust optimistic mode
@@ -337,6 +399,38 @@ class ClimateIP(ClimateEntity):
         await self.async_update()
         self.async_write_ha_state()
 
+    async def async_refresh_humidity(self):
+        """
+        Force a fresh humidity reading.
+
+        Confirmed by directly probing the local API: resending the target
+        temperature (the previous approach) does NOT refresh Humidity.current
+        - that was an incorrect assumption. The actual trigger, matching what
+        the SmartThings app's humidity-refresh icon does, is writing the
+        "AirMonitoring_On" Mode option. This makes the unit run a one-shot
+        air-quality sampling pass (the audible beep), after which
+        Humidity.current (and the other air-quality sensors) reports a real
+        value for roughly 20-30 seconds before the device reverts on its own.
+        """
+        if "air_monitoring_refresh" not in self.rac._operations:
+            _LOGGER.warning(
+                "samsung_ac: cannot refresh humidity, "
+                "'air_monitoring_refresh' operation is not configured."
+            )
+            return
+
+        _LOGGER.info(
+            "samsung_ac: sending AirMonitoring_On to trigger a fresh "
+            "humidity/air-quality reading."
+        )
+        await self.rac.async_set_property("air_monitoring_refresh", "on")
+
+        await asyncio.sleep(self._update_delay)
+        # Bypass the optimistic-update poll debounce here: this call exists
+        # specifically to get a real, fresh reading, not to skip one.
+        await self.rac.async_update_state()
+        self.async_write_ha_state()
+
     # --- Standard Properties now read from the controller's cache ---
     @property
     def name(self):
@@ -431,8 +525,42 @@ class ClimateIP(ClimateEntity):
             name=self.name,
         )
 
+        # Periodically nudge the device for a fresh humidity reading, so
+        # users don't have to build their own automation for this. Only
+        # relevant outside Dry mode (which already reports live humidity),
+        # and disabled entirely if humidity_refresh_interval is set to 0.
+        if self._humidity_refresh_interval > 0 and hasattr(
+            self, "async_refresh_humidity"
+        ):
+            self._humidity_refresh_unsub = async_track_time_interval(
+                self.hass,
+                self._async_periodic_humidity_refresh,
+                timedelta(seconds=self._humidity_refresh_interval),
+            )
+
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""
         await super().async_will_remove_from_hass()
         if SAMSUNG_AC_DATA in self.hass.data:
             self.hass.data[SAMSUNG_AC_DATA][ENTITIES].remove(self)
+        if self._humidity_refresh_unsub is not None:
+            self._humidity_refresh_unsub()
+            self._humidity_refresh_unsub = None
+
+    async def _async_periodic_humidity_refresh(self, now):
+        """
+        Timer callback: trigger a fresh humidity reading, skipping cases
+        where it isn't useful - the unit is off, or already in Dry mode
+        (which reports live humidity on its own without needing the
+        AirMonitoring_On nudge).
+        """
+        current_mode = self.hvac_mode
+        if current_mode in (HVACMode.OFF, HVACMode.DRY):
+            _LOGGER.debug(
+                "samsung_ac: skipping periodic humidity refresh, "
+                "hvac_mode is '%s'.",
+                current_mode,
+            )
+            return
+        _LOGGER.debug("samsung_ac: running periodic humidity refresh.")
+        await self.async_refresh_humidity()

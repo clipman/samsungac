@@ -157,6 +157,22 @@ device:
       status_template: '{{ device_state.Devices.0.Temperatures.0.desired | int }}'
       connection_template: '{ "json": { "desired": {{ value | int }} } }'
       unit_template: '{{ device_state.Devices.0.Temperatures.0.unit }}'
+    air_monitoring_refresh:
+      # SmartThings 앱의 습도 새로고침 아이콘과 동일한 동작. 이 옵션을 On으로
+      # 쓰면 기기가 짧게 공기질을 재측정("띵" 비프음)하고, 그 직후 약 20~30초간
+      # Humidity.current(및 다른 공기질 센서)에 실제 값이 채워졌다가 자동으로
+      # 원래 상태(플레이스홀더)로 되돌아갑니다. climate.py의
+      # async_refresh_humidity()에서 이 op을 호출합니다.
+      type: switch
+      connection:
+        params: { method: 'PUT', url: 'https://__CLIMATE_IP_HOST__:8888/devices/__DEVICE_ID__/mode' }
+      values:
+        'off': { value: 'AirMonitoring_Off', connection: { params: { json: { "options": [ "AirMonitoring_Off"] } } } }
+        'on': { value: 'AirMonitoring_On', connection: { params: { json: { "options": [ "AirMonitoring_On"] } } } }
+      status_template: >-
+        {%- for o in device_state.Devices.0.Mode.options -%}
+          {%- if o.startswith('AirMonitoring_') -%}{{ o }}{%- endif -%}
+        {%- endfor -%}
   attributes:
     current_temperature:
       type: number
@@ -202,13 +218,25 @@ device:
           {%- if s.type == 'FineDust' -%}{{ s['values'][0] }}{%- endif -%}
         {%- endfor -%}
     humidity:
-      # 일부 기종(특히 룸 에어컨)은 제습(Dry) 모드로 동작 중일 때만
-      # "Humidity" 값을 실제로 채워서 보내고, 그 외 모드에서는 필드 자체가
-      # 없거나 null로 옵니다. 이는 SmartThings 공식 앱에서도 동일하게
-      # 보고되는 기기/펌웨어 자체의 한계로, 로컬 API 쪽에서 값을 새로
-      # 만들어낼 수는 없습니다. 대신 keep_last_value를 켜서, 값이 비게
-      # 되는 주기에는 마지막으로 측정된 습도를 그대로 유지합니다
+      # 평상시(냉방 등)에는 이 필드가 비어있거나 플레이스홀더 값으로 오는데,
+      # 이는 습도 센서가 상시 측정되는 게 아니라 "on-demand"로만 측정되기
+      # 때문입니다. 실제로 값을 갱신시키려면 operations의
+      # air_monitoring_refresh(AirMonitoring_On)를 호출해야 하며, 이는
+      # samsung_ac_refresh_humidity 서비스(climate.py의
+      # async_refresh_humidity())로 노출되어 있습니다. 갱신 후에도 기기가
+      # 20~30초 뒤 자동으로 플레이스홀더 상태로 되돌아가므로, keep_last_value로
+      # 그 사이/이후 구간에는 마지막으로 측정된 습도를 그대로 유지합니다
       # (즉시 unknown으로 떨어지지 않도록).
+      #
+      # 또한 이 기기는 값이 비어있을 때 필드를 생략하거나 null을 보내는
+      # 대신, 리터럴 "0"을 보내는 경우가 있습니다("" / "None"과 달리
+      # keep_last_value 로직을 그냥 통과해 실제 값처럼 덮어써버림).
+      # 실내 습도가 실제로 0%인 경우는 사실상 없으므로, ignore_values로
+      # "0"도 "새 데이터 없음"으로 취급해 마지막 값을 유지합니다.
+      # (SmartThings 앱 자체도 값이 없을 땐 "-"로 표시하는데, 로컬 API가
+      # 그 문자열을 그대로 흘려보내는 경우까지 대비해 properties.py의
+      # 숫자 파싱 실패 판정이 "-" 같은 비숫자 값도 자동으로 걸러줍니다.)
       type: number
       keep_last_value: true
+      ignore_values: ["0"]
       status_template: '{{ device_state.Devices.0.Humidity.current }}'

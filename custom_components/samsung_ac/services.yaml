@@ -1,3 +1,19 @@
+samsung_ac_refresh_humidity:
+  name: Refresh Samsung AC humidity
+  description: >-
+    Indoor humidity on this device is only measured on-demand, not
+    continuously. This service triggers the same "AirMonitoring_On" command
+    the SmartThings app's humidity-refresh icon uses, which makes the unit
+    beep and briefly re-sample the air (including humidity), then re-reads
+    the full status a moment later so the humidity attribute gets a fresh
+    value. The device reverts to its placeholder reading again after
+    roughly 20-30 seconds, so call this again whenever you need an
+    up-to-date value (e.g. periodically from an automation).
+  target:
+    entity:
+      domain: climate
+      integration: samsung_ac
+
 samsung_ac_set_property:
   name: Set Samsung AC property
   description: >-

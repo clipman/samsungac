@@ -77,11 +77,20 @@ class YamlController(ClimateController):
         self._debug = config.get("debug", False)
         self._temp_unit = UnitOfTemperature.CELSIUS
         self._service_schema_map = {vol.Optional(ATTR_ENTITY_ID): cv.comp_entity_ids}
-        # debug=false(기본값)일 때도 warning/error는 계속 보이도록 WARNING을 기본으로 두고,
-        # debug=true일 때는 매 폴링 사이클마다 찍히는 상세 로그(.debug())까지 노출합니다.
-        # 예전처럼 INFO를 기본 on/off 기준으로 쓰면 15초 폴링마다 대량의 로그가 쌓여
-        # HA의 "logging too frequently" 경고를 유발합니다.
-        self._logger.setLevel(logging.DEBUG if self._debug else logging.WARNING)
+        # 이 로거(`logging.getLogger(__package__)`)는 climate.py/sensor.py/
+        # properties.py/connection_request.py 등 컴포넌트 전체가 공유하는
+        # 싱글턴입니다. 기기(디바이스)나 플랫폼(climate/sensor)마다 각자
+        # 독립된 YamlController 인스턴스가 만들어질 수 있으므로, 여기서
+        # 무조건 setLevel()을 호출하면 나중에 초기화되는 컨트롤러가 앞서
+        # debug: true로 올려둔 레벨을 WARNING으로 도로 낮춰버리는 경합이
+        # 생깁니다(초기화 순서에 따라 로그가 처음 한두 번만 찍히고 그 뒤로
+        # 완전히 조용해지는 원인). 그래서 "낮추는 것"은 하지 않고 필요할 때
+        # "올리는 것"만 합니다 - 이 컴포넌트에 설정된 기기/플랫폼 중 하나라도
+        # debug: true면, 다른 기기가 debug: false여도 전체 로깅이 계속
+        # 살아있습니다. debug: false뿐인 기본 상태의 로그 레벨(스팸 방지)은
+        # HA 자체의 기본 로그 레벨 및 `logger:` 설정에 맡깁니다.
+        if self._debug:
+            self._logger.setLevel(logging.DEBUG)
         self._yaml = config.get(CONF_CONFIG_FILE)
         self._ip_address = config.get(CONF_IP_ADDRESS, None)
         self._device_id = config.get(CONF_DEVICE_ID, "032000000")

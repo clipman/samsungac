@@ -28,7 +28,7 @@ from homeassistant.const import (
 )
 from homeassistant.exceptions import PlatformNotReady
 
-from .controller import create_controller
+from .controller import ENTITIES, SAMSUNG_AC_DATA, create_controller
 from .device import async_register_device
 from .yaml_const import (
     CONF_CERT,
@@ -110,7 +110,13 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up samsung_ac auxiliary sensors."""
-    _LOGGER.setLevel(logging.DEBUG if config.get(CONF_DEBUG, False) else logging.WARNING)
+    # _LOGGER는 climate 플랫폼, controller_yaml.py, properties.py 등과
+    # 공유되는 싱글턴 로거입니다. 여기서 무조건 setLevel()을 부르면, 이
+    # sensor 플랫폼이 climate 플랫폼(혹은 다른 기기)보다 나중에 초기화될
+    # 때 이미 debug: true로 올려둔 레벨을 WARNING으로 도로 낮춰버립니다.
+    # 그래서 "낮추는 것"은 하지 않고 필요할 때 "올리는 것"만 합니다.
+    if config.get(CONF_DEBUG, False):
+        _LOGGER.setLevel(logging.DEBUG)
     _LOGGER.info("samsung_ac: async setup sensor platform")
 
     wanted_keys = config.get(CONF_SENSORS, [])
@@ -214,6 +220,15 @@ class ClimateIpSensor(SensorEntity):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
 
+        # Register into the same shared registry climate.py entities use,
+        # so e.g. the samsung_ac_refresh_humidity service can find this
+        # sensor (via its shared `rac` controller) and push it a fresh
+        # state right after a refresh, instead of it sitting stale until
+        # its own next scheduled poll.
+        if SAMSUNG_AC_DATA not in self.hass.data:
+            self.hass.data[SAMSUNG_AC_DATA] = {ENTITIES: []}
+        self.hass.data[SAMSUNG_AC_DATA][ENTITIES].append(self)
+
         # Same reasoning as climate.py: this platform is configured via
         # configuration.yaml (no config_entry), so device_info is never read
         # automatically. Attach this sensor to the same device as the AC's
@@ -224,6 +239,12 @@ class ClimateIpSensor(SensorEntity):
             device_unique_id=self._device_unique_id,
             name=self._device_name,
         )
+
+    async def async_will_remove_from_hass(self):
+        """Run when entity will be removed from hass."""
+        await super().async_will_remove_from_hass()
+        if SAMSUNG_AC_DATA in self.hass.data:
+            self.hass.data[SAMSUNG_AC_DATA][ENTITIES].remove(self)
 
     async def async_update(self):
         """Refresh the shared controller, then push state to linked sensors."""

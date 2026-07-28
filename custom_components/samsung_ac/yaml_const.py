@@ -21,6 +21,8 @@ CONFIG_DEVICE_VALIDATION_TEMPLATE = "validation_template"
 CONFIG_DEVICE_CONDITION_TEMPLATE = "condition_template"
 CONFIG_DEVICE_POWER_TEMPLATE = "power_template"
 CONFIG_DEVICE_KEEP_LAST_VALUE = "keep_last_value"
+CONFIG_DEVICE_IGNORE_VALUES = "ignore_values"
+CONFIG_DEVICE_HUMIDITY_REFRESH_INTERVAL = "humidity_refresh_interval"
 
 CONF_CERT = "cert"
 CONF_DEBUG = "debug"

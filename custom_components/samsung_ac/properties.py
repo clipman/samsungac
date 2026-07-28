@@ -1,4 +1,5 @@
 import json
+import logging
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN, UnitOfTemperature
@@ -8,6 +9,7 @@ from .connection import Connection
 from .yaml_const import (
     CONFIG_DEVICE_CONNECTION,
     CONFIG_DEVICE_CONNECTION_TEMPLATE,
+    CONFIG_DEVICE_IGNORE_VALUES,
     CONFIG_DEVICE_KEEP_LAST_VALUE,
     CONFIG_DEVICE_OPERATION_NUMBER_MAX,
     CONFIG_DEVICE_OPERATION_NUMBER_MIN,
@@ -21,6 +23,8 @@ from .yaml_const import (
 
 CLIMATE_IP_PROPERTIES = []
 CLIMATE_IP_STATUS_GETTER = []
+
+_LOGGER = logging.getLogger(__package__)
 
 PROPERTY_TYPE_STRING = "string"
 PROPERTY_TYPE_MODE = "modes"
@@ -88,6 +92,31 @@ class DeviceProperty:
         # humidity sensor Samsung only reports while in Dry mode) keeps the
         # last known good value instead of dropping to unknown/unavailable.
         self._keep_last_value = False
+        # Additional rendered values (as strings, after stripping) that
+        # should be treated the same as an empty/None render for the
+        # purposes of keep_last_value - i.e. "the device did not actually
+        # report a fresh value this cycle". Some Samsung units send a
+        # literal sentinel (e.g. "0" for humidity when it isn't currently
+        # being measured) instead of omitting the field or sending null, so
+        # empty/None alone isn't enough to detect a stale/placeholder read.
+        self._ignore_values = []
+        # True while the property is currently "stuck" on a kept last value
+        # because the device is reporting a placeholder. Used so the INFO
+        # log below only fires on the transition into/out of that state
+        # instead of every single poll cycle.
+        self._showing_placeholder = False
+
+    def _is_placeholder_value(self, v):
+        """
+        Return True if a rendered status_template value should be treated
+        as "the device did not report a fresh value this cycle" rather
+        than a real reading - i.e. the same case as an empty/None render.
+        Only consulted when keep_last_value is enabled.
+        Subclasses (e.g. numeric properties) extend this with type-specific
+        checks.
+        """
+        s = str(v).strip()
+        return s in ("", "None") or s in self._ignore_values
 
     @property
     def id(self):
@@ -147,6 +176,9 @@ class DeviceProperty:
                     node[CONFIG_DEVICE_VALIDATION_TEMPLATE]
                 )
             self._keep_last_value = bool(node.get(CONFIG_DEVICE_KEEP_LAST_VALUE, False))
+            self._ignore_values = [
+                str(v).strip() for v in node.get(CONFIG_DEVICE_IGNORE_VALUES, [])
+            ]
             self._connection = self._connection.create_updated(
                 node.get(CONFIG_DEVICE_CONNECTION, {})
             )
@@ -168,15 +200,70 @@ class DeviceProperty:
             try:
                 v = self.status_template.render(device_state=device_state)
             except Exception as e:
-                # Log template rendering error if needed
-                pass
+                # Previously silently swallowed, which made "the device
+                # simply omitted this field" indistinguishable from "our
+                # template is broken" in the logs. Surface it (at debug, so
+                # it doesn't spam by default when a field is legitimately
+                # absent for some device models).
+                _LOGGER.debug(
+                    "samsung_ac: %s status_template render failed: %s",
+                    self._id,
+                    e,
+                )
+                if self._keep_last_value:
+                    # A field that's missing entirely from this cycle's
+                    # JSON (e.g. some devices only include "Humidity" at
+                    # all right after being nudged, and drop the key
+                    # outright the rest of the time - not just null/empty)
+                    # is functionally the same "no fresh value this cycle"
+                    # situation as an empty render. Route it through the
+                    # same placeholder bookkeeping/logging below instead of
+                    # leaving it here as a silent debug-only dead end - the
+                    # INFO transition log is exactly what's needed to
+                    # confirm the kept value logic engaged.
+                    v = ""
         if v is not STATE_UNKNOWN:
-            if self._keep_last_value and str(v).strip() in ("", "None"):
+            if self._keep_last_value and self._is_placeholder_value(v):
                 # The device omitted/nulled this field this cycle (e.g. some
                 # Samsung units only ever populate Humidity while in Dry
-                # mode). Rather than flashing to unknown/unavailable, hang
-                # onto the last real reading until a new one arrives.
+                # mode), or reported a known placeholder value (configured
+                # via ignore_values, or - for numeric properties - anything
+                # that doesn't even parse as a number, like "-"). Rather
+                # than flashing to unknown/unavailable - or worse, silently
+                # overwriting the last real reading with a bogus one - hang
+                # onto the last real value until a genuine new one arrives.
+                if not self._showing_placeholder:
+                    # Log the transition at INFO so it's visible without
+                    # needing debug: true - this is the exact moment
+                    # people need visibility into (e.g. right after a
+                    # "refresh humidity" nudge, seeing whether the kept
+                    # value logic actually engaged).
+                    _LOGGER.info(
+                        "samsung_ac: %s got placeholder value %r, keeping "
+                        "last value %r (further placeholder reads logged "
+                        "at debug level until a fresh value arrives)",
+                        self._id,
+                        v,
+                        self._value,
+                    )
+                    self._showing_placeholder = True
+                elif debug:
+                    _LOGGER.debug(
+                        "samsung_ac: %s still getting placeholder value "
+                        "%r, keeping last value %r",
+                        self._id,
+                        v,
+                        self._value,
+                    )
                 return self.value
+            if self._showing_placeholder:
+                _LOGGER.info(
+                    "samsung_ac: %s got a fresh value %r, no longer using "
+                    "kept last value",
+                    self._id,
+                    v,
+                )
+                self._showing_placeholder = False
             self._value = self.convert_dev_to_hass(v)
         return self.value
 
@@ -374,6 +461,39 @@ class BasicNumericOperation(DeviceOperation):
             return float(self._value)
         except (ValueError, TypeError):
             return None
+
+    def _is_placeholder_value(self, v):
+        """
+        In addition to the base empty/None/ignore_values checks, treat any
+        render that doesn't even parse as a number as a placeholder. Some
+        devices signal "not currently measured" with a non-numeric marker
+        (e.g. "-", matching what the vendor app itself shows in that state)
+        rather than an empty string, null, or a numeric sentinel - those
+        specific markers still need keep_last_value on to take effect, but
+        we don't need to know the exact marker text ahead of time.
+        """
+        if super()._is_placeholder_value(v):
+            return True
+        try:
+            parsed = float(str(v).strip())
+        except (TypeError, ValueError):
+            return True
+
+        # The base class's ignore_values check only catches an exact string
+        # match (e.g. configured ignore_values: ["0"] against a rendered
+        # "0"). But numeric device fields commonly come back through Jinja
+        # as e.g. "0.0" for a Python float 0.0, which never equals the
+        # string "0" - silently defeating the sentinel entirely and letting
+        # the placeholder overwrite a real kept value (observed: Humidity
+        # current comes back as 0.0, not 0). Compare numerically as well so
+        # "0", "0.0", "0.00" etc. all match the same configured sentinel.
+        for ignored in self._ignore_values:
+            try:
+                if float(ignored) == parsed:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
 
     @property
     def config_validation_type(self):
