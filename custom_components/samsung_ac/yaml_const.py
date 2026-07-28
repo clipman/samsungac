@@ -20,6 +20,7 @@ CONFIG_DEVICE_CONNECTION_TEMPLATE = "connection_template"
 CONFIG_DEVICE_VALIDATION_TEMPLATE = "validation_template"
 CONFIG_DEVICE_CONDITION_TEMPLATE = "condition_template"
 CONFIG_DEVICE_POWER_TEMPLATE = "power_template"
+CONFIG_DEVICE_KEEP_LAST_VALUE = "keep_last_value"
 
 CONF_CERT = "cert"
 CONF_DEBUG = "debug"

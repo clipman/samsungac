@@ -8,6 +8,7 @@ from .connection import Connection
 from .yaml_const import (
     CONFIG_DEVICE_CONNECTION,
     CONFIG_DEVICE_CONNECTION_TEMPLATE,
+    CONFIG_DEVICE_KEEP_LAST_VALUE,
     CONFIG_DEVICE_OPERATION_NUMBER_MAX,
     CONFIG_DEVICE_OPERATION_NUMBER_MIN,
     CONFIG_DEVICE_OPERATION_TEMP_UNIT_TEMPLATE,
@@ -82,6 +83,11 @@ class DeviceProperty:
         self._connection_template = None
         self._validation_template = None
         self._device_state = None
+        # When True, a status_template render that comes back empty/None
+        # (device simply didn't include this field this cycle, e.g. a
+        # humidity sensor Samsung only reports while in Dry mode) keeps the
+        # last known good value instead of dropping to unknown/unavailable.
+        self._keep_last_value = False
 
     @property
     def id(self):
@@ -140,6 +146,7 @@ class DeviceProperty:
                 self._validation_template = Template(
                     node[CONFIG_DEVICE_VALIDATION_TEMPLATE]
                 )
+            self._keep_last_value = bool(node.get(CONFIG_DEVICE_KEEP_LAST_VALUE, False))
             self._connection = self._connection.create_updated(
                 node.get(CONFIG_DEVICE_CONNECTION, {})
             )
@@ -164,6 +171,12 @@ class DeviceProperty:
                 # Log template rendering error if needed
                 pass
         if v is not STATE_UNKNOWN:
+            if self._keep_last_value and str(v).strip() in ("", "None"):
+                # The device omitted/nulled this field this cycle (e.g. some
+                # Samsung units only ever populate Humidity while in Dry
+                # mode). Rather than flashing to unknown/unavailable, hang
+                # onto the last real reading until a new one arrives.
+                return self.value
             self._value = self.convert_dev_to_hass(v)
         return self.value
 

@@ -202,7 +202,13 @@ device:
           {%- if s.type == 'FineDust' -%}{{ s['values'][0] }}{%- endif -%}
         {%- endfor -%}
     humidity:
-      # Humidity 객체 자체가 없는 기기(예: 룸 에어컨)에서는 렌더링이
-      # 비어있는 값이 되어 sensor.py 쪽에서 unknown 처리됩니다.
+      # 일부 기종(특히 룸 에어컨)은 제습(Dry) 모드로 동작 중일 때만
+      # "Humidity" 값을 실제로 채워서 보내고, 그 외 모드에서는 필드 자체가
+      # 없거나 null로 옵니다. 이는 SmartThings 공식 앱에서도 동일하게
+      # 보고되는 기기/펌웨어 자체의 한계로, 로컬 API 쪽에서 값을 새로
+      # 만들어낼 수는 없습니다. 대신 keep_last_value를 켜서, 값이 비게
+      # 되는 주기에는 마지막으로 측정된 습도를 그대로 유지합니다
+      # (즉시 unknown으로 떨어지지 않도록).
       type: number
+      keep_last_value: true
       status_template: '{{ device_state.Devices.0.Humidity.current }}'
