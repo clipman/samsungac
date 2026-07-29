@@ -1,5 +1,13 @@
 device:
   poll: True
+  # 기동 시 각 operation의 validation_template을 device_state에 대해 평가해서,
+  # 결과가 "valid"가 아니면 그 operation을 자동으로 제외합니다(현재는 purify만
+  # 해당). purify는 현재 베이스 모드(Cool/Dry)의 'Clean' 변형(CoolClean/
+  # DryClean)으로 동작하는데, supportedModes에 그런 '...Clean' 항목이
+  # 하나도 없는 기기/펌웨어라면 애초에 청정 기능이 없는 것이므로 이
+  # operation 자체를 제외시켜, samsung_ac_set_property 서비스로 호출해도
+  # 기기에 잘못된 모드가 전송되어 400을 유발하지 않게 합니다.
+  validate_properties: True
   connection:
     type: request
     params:
@@ -21,7 +29,20 @@ device:
         'fan_only': { value : 'Wind', connection: { params: { json: { "modes": ["Wind"] } }, connection: { params: { json: { "Operation": { "power" : "On" } }, url: 'https://__CLIMATE_IP_HOST__:8888/devices/__DEVICE_ID__' }, condition_template: "{% if device_state.Devices.0.Operation.power == 'Off' -%}1{%- else -%}0{%- endif %}" } } }
         'auto': { value : 'Auto', connection: { params: { json: { "modes": ["Auto"] } }, connection: { params: { json: { "Operation": { "power" : "On" } }, url: 'https://__CLIMATE_IP_HOST__:8888/devices/__DEVICE_ID__' }, condition_template: "{% if device_state.Devices.0.Operation.power == 'Off' -%}1{%- else -%}0{%- endif %}" } } }
         'off': { value : 'Off', connection: { params: { json: { "Operation": { "power" : "Off" } }, url: 'https://__CLIMATE_IP_HOST__:8888/devices/__DEVICE_ID__' }, condition_template: "{% if device_state.Devices.0.Operation.power == 'On' -%}1{%- else -%}0{%- endif %}" } }
-      status_template: "{% if device_state.Devices.0.Operation.power == 'Off' -%}{{ device_state.Devices.0.Operation.power }}{%- else -%}{{ device_state.Devices.0.Mode.modes.0 }}{%- endif %}"
+      # 기기는 공기청정(purify)이 켜져 있으면 Mode.modes에 'Cool'/'Dry' 대신
+      # 'CoolClean'/'DryClean'을 보고합니다(purify 항목 참고). 이 값을 그대로
+      # hvac_mode로 흘려보내면 HA의 HVACMode enum이 이해 못 하는 값이라
+      # 상태 계산 자체가 예외로 죽어버리므로(ValueError: 'CoolClean' is not
+      # a valid HVACMode), 'Clean' 접미사를 떼어 베이스 모드로 정규화해서
+      # 보고합니다. purify 자체의 on/off 상태는 별도의 purify 스위치가
+      # 담당합니다.
+      status_template: >-
+        {%- if device_state.Devices.0.Operation.power == 'Off' -%}
+        {{ device_state.Devices.0.Operation.power }}
+        {%- else -%}
+        {%- set m = device_state.Devices.0.Mode.modes.0 -%}
+        {%- if m.endswith('Clean') -%}{{ m[:-5] }}{%- else -%}{{ m }}{%- endif -%}
+        {%- endif -%}
     preset: # preset_mode
       type: modes
       connection:
@@ -51,25 +72,50 @@ device:
         'on': { value: 'On', connection: { params: { json: { "Operation": { "power" : "On" } } } } }
       status_template: '{{ device_state.Devices.0.Operation.power }}'
     purify:
-      # 참고: 두 기기 응답 어디에도 'Spi_'로 시작하는 옵션이 보이지 않습니다.
-      # 이 기종/펌웨어에서는 지원되지 않는 기능일 수 있으니 실제 동작 확인이 필요합니다.
+      # 이전 가정(Mode.options의 'Spi_' 접두어 옵션)은 틀렸습니다: 두 유닛
+      # 모두 그런 옵션이 없고, 실제로 Spi_On을 보내면 기기가 400으로
+      # 거부합니다. 실측 로그로 확인한 실제 동작 방식은 다릅니다 - 이
+      # 기종들은 공기청정을 별도 옵션이 아니라 "베이스 모드에 Clean을
+      # 붙인 모드"로 표현합니다. 즉 Mode.modes가 'Cool' <-> 'CoolClean',
+      # 'Dry' <-> 'DryClean' 사이를 오가며, 현재 베이스 모드(냉방/제습)는
+      # 그대로 유지된 채 청정 기능만 켜지고 꺼집니다.
       #
-      # 예전에는 Mode.options.3처럼 고정 인덱스로 읽었지만, preset/special/
-      # auto_clean/beep과 마찬가지로 options 배열 순서는 기기마다(거실 유닛에
-      # 'Operation_Family'가 앞에 하나 더 붙는 것처럼) 달라질 수 있어 고정
-      # 인덱스는 위험합니다. 다른 옵션들과 동일하게 'Spi_' 접두어로 검색하도록
-      # 통일했습니다. (이 기능이 실제로 지원되지 않는 기종이면 그냥 빈 문자열이
-      # 반환됩니다.)
+      # 그래서 명령을 만들려면 "지금 어떤 베이스 모드인지"를 알아야 하는데,
+      # 그건 value 자체가 아니라 현재 device_state에서 와야 합니다. 이를
+      # 위해 connection_request.py의 execute_internal에서
+      # connection_template 렌더링 시 value뿐 아니라 device_state도 함께
+      # 넘기도록 고쳤습니다. 아래 connection_template은 현재 Mode.modes.0
+      # 에서 'Clean' 접미사를 떼어 베이스 모드를 구하고, on/off에 따라 그
+      # 베이스 모드 그대로 또는 'Clean'을 붙인 모드로 PUT합니다.
+      #
+      # 'CoolClean'/'DryClean' 같은 Clean 변형을 아예 지원하지 않는
+      # 기기/펌웨어에서는 이 기능 자체가 없을 수 있으므로,
+      # supportedModes에 '...Clean' 형태가 하나라도 있을 때만 이
+      # operation을 노출하도록 validation_template으로 걸러냅니다.
       type: switch
       connection:
         params: { method: 'PUT', url: 'https://__CLIMATE_IP_HOST__:8888/devices/__DEVICE_ID__/mode' }
       values:
-        'off': { value: 'Spi_Off', connection: { params: { json: { "options": [ "Spi_Off"] } } } }
-        'on': { value: 'Spi_On', connection: { params: { json: { "options": [ "Spi_On"] } } } }
-      status_template: >-
-        {%- for o in device_state.Devices.0.Mode.options -%}
-          {%- if o.startswith('Spi_') -%}{{ o }}{%- endif -%}
+        'off': { value: 'off' }
+        'on': { value: 'on' }
+      connection_template: >-
+        {%- set m = device_state.Devices.0.Mode.modes.0 -%}
+        {%- if m.endswith('Clean') -%}{%- set base = m[:-5] -%}{%- else -%}{%- set base = m -%}{%- endif -%}
+        {%- if value == 'on' -%}{%- set target = base ~ 'Clean' -%}{%- else -%}{%- set target = base -%}{%- endif -%}
+        { "json": { "modes": ["{{ target }}"] } }
+      # 주의: supportedModes에 'CoolClean'과 'DryClean'이 둘 다 있는 경우처럼
+      # 매치가 2건 이상이면 단순히 루프 안에서 매번 'valid'를 출력하는
+      # 방식은 'validvalid'가 되어 is_valid()의 '== "valid"' 비교에 실패해
+      # 버립니다(정상 지원 기기인데도 잘못 제외됨). found 리스트에 매치
+      # 여부만 기록해두고, 루프가 끝난 뒤 딱 한 번만 'valid'를 출력합니다.
+      validation_template: >-
+        {%- set found = [] -%}
+        {%- for m in device_state.Devices.0.Mode.supportedModes -%}
+          {%- if m.endswith('Clean') and found.append(1) -%}{%- endif -%}
         {%- endfor -%}
+        {%- if found -%}valid{%- endif -%}
+      status_template: >-
+        {%- if device_state.Devices.0.Mode.modes.0.endswith('Clean') -%}on{%- else -%}off{%- endif -%}
     auto_clean:
       type: switch
       connection:

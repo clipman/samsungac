@@ -155,7 +155,9 @@ class ConnectionRequestBase(Connection):
         # wrong payload for one of the two calls.
         params = dict(self._params)
         if template is not None:
-            params.update(json.loads(template.render(value=value)))
+            params.update(
+                json.loads(template.render(value=value, device_state=device_state))
+            )
 
         # Only idempotent status GETs are cache-eligible; PUT commands always execute.
         cache_key = params.get("url") if params.get("method") == "GET" else None
