@@ -80,6 +80,27 @@ SUPPORTED_FEATURES_MAP = {
     ATTR_PRESET_MODE: ClimateEntityFeature.PRESET_MODE,
 }
 
+# Keys HA's ClimateEntity already derives from our own dedicated
+# properties (fan_mode, hvac_mode, etc. below) - and does so live, on
+# every read. See extra_state_attributes for why these must never be
+# allowed to leak through from self.rac.state_attributes, which is only a
+# point-in-time snapshot refreshed on real polls.
+_EXTRA_ATTRIBUTES_EXCLUDE = {
+    ATTR_HVAC_MODE,
+    ATTR_HVAC_MODES,
+    ATTR_FAN_MODE,
+    ATTR_FAN_MODES,
+    ATTR_PRESET_MODE,
+    ATTR_PRESET_MODES,
+    ATTR_SWING_MODE,
+    ATTR_SWING_MODES,
+    ATTR_CURRENT_TEMPERATURE,
+    ATTR_TEMPERATURE,
+    ATTR_MIN_TEMP,
+    ATTR_MAX_TEMP,
+    "current_humidity",
+}
+
 DEFAULT_CONF_CERT_FILE = "ac14k_m.pem"
 DEFAULT_CONF_TEMP_UNIT = UnitOfTemperature.CELSIUS
 DEFAULT_CONF_CONTROLLER = "yaml"
@@ -469,8 +490,33 @@ class ClimateIP(ClimateEntity):
 
     @property
     def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self.rac.state_attributes
+        """
+        Return the state attributes.
+
+        self.rac.state_attributes is a point-in-time snapshot that
+        YamlController only refreshes on a real device poll (see
+        async_update_state) - it is *not* touched by the per-property
+        optimistic update (set_optimistic_value), so right after a
+        command it can lag behind for as long as the optimistic-update
+        debounce holds. It also happens to reuse the exact same keys
+        (fan_mode, preset_mode, swing_mode, hvac_mode, ...) as the
+        dedicated properties below, which HA computes fresh/live on every
+        read. Since HA builds the final attributes dict by merging this
+        entity's own state_attributes first and extra_state_attributes on
+        top, any of those keys leaking through here would let this stale
+        snapshot silently overwrite the correct, live value in what's
+        actually sent to the frontend - which is exactly why fan/preset/
+        swing mode changes could appear to take several seconds to show
+        up, even though the dedicated property already updates instantly.
+        Filter them out here so only genuinely-extra attributes (power,
+        purify, auto_clean, beep, special_mode, good_sleep, debug's raw
+        device_state json, etc.) come from this cache.
+        """
+        return {
+            key: value
+            for key, value in self.rac.state_attributes.items()
+            if key not in _EXTRA_ATTRIBUTES_EXCLUDE
+        }
 
     @property
     def temperature_unit(self):
