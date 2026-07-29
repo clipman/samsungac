@@ -143,7 +143,17 @@ class ConnectionRequestBase(Connection):
         import requests
         from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
-        params = self._params
+        # IMPORTANT: copy, don't alias, self._params. self._params is shared
+        # state on this Connection object, which can be reused across
+        # multiple concurrent async_set_property calls for the same
+        # operation (e.g. a user double-tapping the same control quickly).
+        # The actual HTTP call happens later, inside do_request(), on a
+        # background thread - if that closure read self._params directly
+        # (as it used to) instead of this local snapshot, a second
+        # concurrent call could overwrite self._params with its own body
+        # before the first call's request actually goes out, sending the
+        # wrong payload for one of the two calls.
+        params = dict(self._params)
         if template is not None:
             params.update(json.loads(template.render(value=value)))
 
@@ -167,12 +177,12 @@ class ConnectionRequestBase(Connection):
                 with requests.sessions.Session() as session:
                     self.logger.debug("Setting up HTTP Adapter and ssl context")
 
-                    _LOGGER.debug(f"execute_internal - self: {self} - params: {_redact_params(self._params)} - template: {template} - value: {value} - device_state: {device_state}")
+                    _LOGGER.debug(f"execute_internal - self: {self} - params: {_redact_params(params)} - template: {template} - value: {value} - device_state: {device_state}")
 
                     session.mount("https://", SamsungHTTPAdapter())
-                    self.logger.debug(_redact_params(self._params))
+                    self.logger.debug(_redact_params(params))
 
-                    return session.request(**self._params)
+                    return session.request(**params)
 
         loop = asyncio.get_running_loop()
         try:
