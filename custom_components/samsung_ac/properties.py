@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN, UnitOfTemperature
@@ -105,6 +106,33 @@ class DeviceProperty:
         # log below only fires on the transition into/out of that state
         # instead of every single poll cycle.
         self._showing_placeholder = False
+        # Timestamp (time.time()) until which a real status_template
+        # refresh should be skipped, because the value was just set
+        # optimistically (e.g. climate.py's set_hvac_mode/set_fan_mode/
+        # set_preset_mode/set_swing_mode) and the physical unit likely
+        # hasn't caught up to the command yet. This lives here - on the
+        # property itself - rather than on any one entity, because this
+        # controller/its properties are shared across multiple HA entities
+        # (the climate entity and, if configured, several sensor.py
+        # entities all polling the same underlying device on their own
+        # independent schedules). A debounce flag kept only on the climate
+        # entity would protect that entity's own poll, but not stop a
+        # sibling sensor entity's poll - or an explicit full refresh like
+        # async_refresh_humidity(), which intentionally re-reads
+        # everything - from immediately clobbering the just-set value
+        # before the unit has actually applied it.
+        self._optimistic_until = 0.0
+
+    def set_optimistic_value(self, value, debounce_seconds=0):
+        """
+        Immediately show `value` as this property's current value, and, if
+        debounce_seconds > 0, suppress any real refresh from
+        async_update_state() until that many seconds from now - no matter
+        which poller ends up calling it.
+        """
+        self._value = value
+        if debounce_seconds > 0:
+            self._optimistic_until = time.time() + debounce_seconds
 
     def _is_placeholder_value(self, v):
         """
@@ -195,6 +223,14 @@ class DeviceProperty:
         This method is now async.
         """
         self._device_state = device_state
+        if self._optimistic_until and time.time() < self._optimistic_until:
+            _LOGGER.debug(
+                "samsung_ac: %s skipping refresh, optimistic value %r is "
+                "still within its debounce window.",
+                self._id,
+                self._value,
+            )
+            return self.value
         v = STATE_UNKNOWN
         if self.status_template is not None and device_state is not None:
             try:

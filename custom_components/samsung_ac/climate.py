@@ -91,6 +91,12 @@ REQUIREMENTS = ["requests>=2.21.0"]
 DEFAULT_SAMSUNG_AC_TEMP_MIN = 8
 DEFAULT_SAMSUNG_AC_TEMP_MAX = 30
 DEFAULT_UPDATE_DELAY = 1.5
+# See _optimistic_debounce_seconds in ClimateIP.__init__: the debounce is
+# max(update_delay * OPTIMISTIC_DEBOUNCE_MULTIPLIER, DEFAULT_OPTIMISTIC_DEBOUNCE_SECONDS),
+# not an independent constant, so it scales with how slow this particular
+# device/network is instead of silently drifting out of sync with update_delay.
+OPTIMISTIC_DEBOUNCE_MULTIPLIER = 5
+DEFAULT_OPTIMISTIC_DEBOUNCE_SECONDS = 10
 # 냉방 등 습도가 상시 갱신되지 않는 모드에서, 이 주기(초)마다 자동으로
 # air_monitoring_refresh를 트리거합니다. 0으로 설정하면 자동 갱신을 비활성화합니다.
 # (제습(Dry) 모드는 이미 자체적으로 습도가 갱신되므로 자동 트리거 대상에서 제외합니다.)
@@ -276,9 +282,25 @@ class ClimateIP(ClimateEntity):
         self._humidity_refresh_unsub = None
         self._enable_turn_on_off_backwards_compatibility = False
         
-        # Attributes for robust optimistic mode
+        # Attributes for robust optimistic mode.
         self._last_optimistic_update_time = 0
-        self._optimistic_debounce_seconds = 10 # Ignore polls for 10s after an optimistic update
+        # This must outlast _update_delay - the time we expect the device
+        # to actually apply a command and reflect it in its own status -
+        # since that's exactly the gap a poll could land in and revert the
+        # optimistic value back to the pre-command state (this entity's own
+        # SCAN_INTERVAL poll, a sibling sensor.py entity's independent poll,
+        # or an explicit full refresh like async_refresh_humidity). Deriving
+        # it from _update_delay means a user who bumps that up for a slower
+        # device/network automatically gets a longer optimistic-hold window
+        # too, instead of the two numbers silently drifting apart. The
+        # multiplier is just a safety margin for polling/scheduling jitter
+        # on top of the expected settle time; DEFAULT_OPTIMISTIC_DEBOUNCE_SECONDS
+        # is a floor so a very small update_delay doesn't shrink it away to
+        # nothing.
+        self._optimistic_debounce_seconds = max(
+            self._update_delay * OPTIMISTIC_DEBOUNCE_MULTIPLIER,
+            DEFAULT_OPTIMISTIC_DEBOUNCE_SECONDS,
+        )
         # Device couples "power" and "hvac_mode" into a single reported state
         # (status_template shows "off" when power is off, otherwise the mode).
         # Remember the last non-off hvac mode so turn_on can optimistically
@@ -310,9 +332,13 @@ class ClimateIP(ClimateEntity):
         Send a command and optimistically update the state immediately.
         The actual network communication runs in the background.
         """
-        # 1. Optimistically update the controller's internal state.
-        if prop in self.rac._operations:
-            self.rac._operations[prop]._value = value
+        # 1. Optimistically update the controller's internal state, and
+        # tell that property itself to ignore real refreshes for a bit -
+        # see set_optimistic_value()/_optimistic_until in properties.py for
+        # why this can't just be a flag kept on this entity.
+        op = self.rac._operations.get(prop)
+        if op is not None:
+            op.set_optimistic_value(value, self._optimistic_debounce_seconds)
         
         # 2. Record the time of this optimistic update and update the UI.
         self._last_optimistic_update_time = time.time()
@@ -330,13 +356,15 @@ class ClimateIP(ClimateEntity):
 
     def _optimistic_set_power(self, power_state):
         """Optimistically update the cached 'power' operation, if present."""
-        if ATTR_POWER in self.rac._operations:
-            self.rac._operations[ATTR_POWER]._value = power_state
+        op = self.rac._operations.get(ATTR_POWER)
+        if op is not None:
+            op.set_optimistic_value(power_state, self._optimistic_debounce_seconds)
 
     def _optimistic_set_hvac_mode(self, hvac_mode):
         """Optimistically update the cached 'hvac_mode' operation, if present."""
-        if ATTR_HVAC_MODE in self.rac._operations:
-            self.rac._operations[ATTR_HVAC_MODE]._value = hvac_mode
+        op = self.rac._operations.get(ATTR_HVAC_MODE)
+        if op is not None:
+            op.set_optimistic_value(hvac_mode, self._optimistic_debounce_seconds)
 
     async def async_set_temperature(self, **kwargs):
         """Asynchronously set new target temperature and verify."""
