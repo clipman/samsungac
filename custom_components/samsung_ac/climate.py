@@ -98,7 +98,14 @@ _EXTRA_ATTRIBUTES_EXCLUDE = {
     ATTR_TEMPERATURE,
     ATTR_MIN_TEMP,
     ATTR_MAX_TEMP,
-    "current_humidity",
+    # Note: the HA-facing attribute is "current_humidity" (see
+    # current_humidity below, which HA surfaces under ATTR_CURRENT_HUMIDITY),
+    # but the underlying cache key from samsung_ac.yaml's attributes.humidity
+    # entry is just "humidity" - unlike current_temperature, where the yaml
+    # key and the HA attribute name happen to match. Exclude the actual
+    # cache key so it doesn't leak through as a redundant duplicate of
+    # current_humidity.
+    "humidity",
 }
 
 DEFAULT_CONF_CERT_FILE = "ac14k_m.pem"
