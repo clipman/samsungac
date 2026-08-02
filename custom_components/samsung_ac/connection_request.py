@@ -189,10 +189,16 @@ class ConnectionRequestBase(Connection):
         loop = asyncio.get_running_loop()
         try:
             resp = await loop.run_in_executor(self._thread_pool, do_request)
-        except Exception:
-            # something goes wrong, print callstack and return None
-            self.logger.error("Request execution failed. Stack trace:")
-            traceback.print_exc()
+        except Exception as ex:
+            # something goes wrong, log the full callstack through the HA
+            # logger (traceback.print_exc() only writes to stderr, which
+            # doesn't show up in the HA log viewer) and return None.
+            self.logger.error(
+                "Request execution failed (%s: %s). Stack trace:\n%s",
+                type(ex).__name__,
+                ex,
+                traceback.format_exc(),
+            )
             return (None, False, 0)
 
         self.logger.debug(
@@ -238,8 +244,12 @@ class ConnectionRequestBase(Connection):
 
         self.logger.debug("Executing command...")
         j, ok, code = await self.execute_internal(template, value, device_state)
-        if not j and 500 <= code < 505:
-            # server error, try again
+        if not j and (code == 0 or 500 <= code < 505):
+            # server error or connection-level failure (timeout, refused,
+            # DNS, etc. - code 0), try again once
+            self.logger.debug(
+                "First attempt failed (code=%s), retrying once in 1s", code
+            )
             await asyncio.sleep(1.0)
             j = (await self.execute_internal(template, value, device_state))[0]
 
