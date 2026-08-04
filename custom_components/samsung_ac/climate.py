@@ -335,6 +335,23 @@ class ClimateIP(ClimateEntity):
         # restore it instead of leaving hvac_mode stuck on "off".
         self._last_active_hvac_mode = None
 
+        # Entity-level fallback cache for current_humidity. This is
+        # deliberately independent from (and on top of) the controller's own
+        # keep_last_value/ignore_values handling in properties.py/
+        # samsung_ac.yaml: that layer's "kept" value still starts out at a
+        # bare 0.0 (BasicNumericOperation.__init__) until the very first
+        # real reading ever arrives - e.g. right after a HA restart, or when
+        # this entity is first added, if the AC happens to be off or in a
+        # non-Dry mode at that moment. In that gap, self.rac.get_property
+        # ("humidity") can still legitimately return 0 even though the
+        # controller-level fix is doing exactly what it's supposed to. This
+        # cache remembers the last value *this entity itself* saw and knows
+        # to be real (>0), so current_humidity below can fall back to it
+        # instead of ever showing a bogus 0%, regardless of whether the AC
+        # is off, mid-refresh-cycle, or the controller cache hasn't been
+        # populated yet.
+        self._last_valid_humidity = None
+
     @property
     def should_poll(self):
         """Return the polling state."""
@@ -545,7 +562,15 @@ class ClimateIP(ClimateEntity):
         Sourced from the same "humidity" attribute the standalone sensor.py
         entity reads (see samsung_ac.yaml). As noted on async_refresh_humidity,
         the device only reports a live value outside Dry mode right after an
-        AirMonitoring_On nudge, so this will read 0/stale between refreshes.
+        AirMonitoring_On nudge, so between refreshes (and whenever the AC is
+        off) the controller's own raw reading can come back as 0, None, or
+        "unknown"/"unavailable" - not because the room's humidity actually
+        changed, but simply because nothing fresh was measured. Rather than
+        surface that as a misleading 0%, hold onto the last reading this
+        entity has actually confirmed to be real (>0) and keep showing that
+        until a genuine new value arrives - including across the AC being
+        turned off, since humidity doesn't reset to zero just because the
+        unit stops running.
 
         If humidity_refresh_interval is set to 0, this unit is being told to
         never trigger that refresh - typically because it has no working
@@ -555,7 +580,25 @@ class ClimateIP(ClimateEntity):
         """
         if self._humidity_refresh_interval <= 0:
             return None
-        return self.rac.get_property("humidity")
+
+        raw = self.rac.get_property("humidity")
+        humidity = None
+        if raw not in (None, STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+            try:
+                humidity = float(raw)
+            except (TypeError, ValueError):
+                humidity = None
+
+        if humidity is not None and humidity > 0:
+            # A genuine fresh reading - trust it and remember it.
+            self._last_valid_humidity = humidity
+            return humidity
+
+        # 0, None, or unparseable: nothing fresh was actually measured this
+        # cycle (includes the AC being off). Keep showing the last real
+        # value instead of flashing to 0%/unknown. Returns None (not shown)
+        # if we've genuinely never seen a valid reading yet.
+        return self._last_valid_humidity
 
     @property
     def target_temperature_step(self):
