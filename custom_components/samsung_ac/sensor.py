@@ -20,11 +20,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONF_IP_ADDRESS,
     CONF_TOKEN,
     CONF_UNIQUE_ID,
     PERCENTAGE,
+    UnitOfDensity,
 )
 from homeassistant.exceptions import PlatformNotReady
 
@@ -66,13 +66,13 @@ SENSOR_TYPES = {
     "pm10": {
         "name": "PM10",
         "device_class": SensorDeviceClass.PM10,
-        "unit": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        "unit": UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         "state_class": SensorStateClass.MEASUREMENT,
     },
     "pm2_5": {
         "name": "PM2.5",
         "device_class": SensorDeviceClass.PM25,
-        "unit": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        "unit": UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         "state_class": SensorStateClass.MEASUREMENT,
     },
     "humidity": {
